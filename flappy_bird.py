@@ -16,7 +16,7 @@ WIN_HEIGHT = 750
 
 STAT_FONT = pygame.font.SysFont("comicsans", 50)
 
-def draw_window(win, bird, pipes, base, score):
+def draw_window(win, birds, pipes, base, score):
     win.blit(BG_IMG, (0,0))
 
     for pipe in pipes:
@@ -27,17 +27,24 @@ def draw_window(win, bird, pipes, base, score):
 
     base.draw(win)
 
-    bird.draw(win)
+    for bird in birds:
+        bird.draw(win)
+
     pygame.display.update()
 
-def draw_text(win, text, font, size, x, y, color):
-    font = pygame.font.Font(font, size)
-    text_surface = font.render(text, True, color)
-    text_rect = text_surface.get_rect(center=(x, y))
-    win.blit(text_surface, text_rect)
+def main(genomes, config):
+    nets = []
+    ge = []
+    birds = []
 
-def main():
-    bird = Bird(WIN_WIDTH // 2 - Bird.IMGS[0].get_width() // 2, WIN_HEIGHT // 2 - Bird.IMGS[0].get_height() // 2)
+    #(genome_id, genome_object) "we just care about the genome object"
+    for _,g in genomes:
+        net = neat.nn.FeedForwardNetwork.create(g,config)
+        nets.append(net)
+        birds.append(Bird(WIN_WIDTH // 2 - Bird.IMGS[0].get_width() // 2, WIN_HEIGHT // 2 - Bird.IMGS[0].get_height() // 2))
+        g.fitness = 0
+        ge.append(g)
+
     base = Base(WIN_HEIGHT-Base.IMG.get_height() // 3)
     pipes = [Pipe(WIN_WIDTH*1.5)]
     win = pygame.display.set_mode((WIN_WIDTH, WIN_HEIGHT))
@@ -45,49 +52,86 @@ def main():
 
     score = 0
 
-    game_state = "waiting"
     run = True
     while run:
         clock.tick(25)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 run = False
+                pygame.quit()
+                quit()
 
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE:
-                    bird.jump()
-    
-        bird.move()
+        pipe_ind = 0
+        if len(birds) > 0:
+            if len(pipes) > 1 and birds[0].x > pipes[0].x + pipes[0].PIPE_TOP.get_width():
+                pipe_ind = 1
+        else:
+            run = False
+            break
+
+        for x, bird in enumerate(birds):
+            bird.move()
+            ge[x].fitness += 0.033
+            output = nets[x].activate((bird.y, abs(bird.y - pipes[pipe_ind].height), abs(bird.y - pipes[pipe_ind].bottom)))
+            #output is a list
+            if output[0] > 0.5:
+                bird.jump()
+
         base.move()
-
         add_pipe = False
         rem = [] 
         for pipe in pipes:
-            if pipe.collide(bird):
-                run = False
+            for x, bird in enumerate(birds):
+                if pipe.collide(bird):
+                    ge[x].fitness -=1
+                    birds.pop(x)
+                    nets.pop(x)
+                    ge.pop(x)
+
+                if not pipe.passed and pipe.x < bird.x:
+                    pipe.passed = True
+                    add_pipe = True
 
             if pipe.x + pipe.PIPE_TOP.get_width() < 0:
                 rem.append(pipe)
-
-            if not pipe.passed and pipe.x < bird.x:
-                pipe.passed = True
-                add_pipe = True
 
             pipe.move()
 
         if add_pipe:
             score += 1
+            for g in ge:
+                g.fitness += 5
             pipes.append(Pipe(WIN_WIDTH*1.25))
 
         for r in rem:
             pipes.remove(r)
 
-        if bird.y + bird.img.get_height() >= (WIN_HEIGHT-Base.IMG.get_height() // 3):
-            run = False
+        for x, bird in enumerate(birds):
+            if bird.y + bird.img.get_height() >= (WIN_HEIGHT-Base.IMG.get_height() // 3) or bird.y < 0:
+                birds.pop(x)
+                nets.pop(x)
+                ge.pop(x)
 
-        draw_window(win, bird, pipes, base, score)
+        draw_window(win, birds, pipes, base, score)
 
-    pygame.quit()
-    quit()
+def run(config_path):
+    config = neat.config.Config(
+        neat.DefaultGenome,
+        neat.DefaultReproduction,
+        neat.DefaultSpeciesSet,
+        neat.DefaultStagnation,
+        config_path
+    )
 
-main()
+    p = neat.Population(config)
+
+    p.add_reporter(neat.StdOutReporter(True))
+    stats = neat.StatisticsReporter()
+    p.add_reporter(stats)
+
+    winner = p.run(main,50)
+
+if __name__ == "__main__":
+    local_dir = os.path.dirname(__file__)
+    config_path = os.path.join(local_dir, "config_feedforward.txt")
+    run(config_path)
